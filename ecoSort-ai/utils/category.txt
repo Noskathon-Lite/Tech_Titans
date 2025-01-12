@@ -1,0 +1,3 @@
+biodegradable
+non_biodegradable
+surface

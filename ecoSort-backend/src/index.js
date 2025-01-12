@@ -1,72 +1,183 @@
 import dotenv from "dotenv";
 import connectDb from "./db/index.js";
 import app from "./app.js";
-import { Server } from "socket.io";
 import { createServer } from "http";
-import { PythonShell } from "python-shell";
+import { WebSocketServer } from "ws";
+import { SerialPort } from "serialport";
+import { ReadlineParser } from "@serialport/parser-readline";
 
-dotenv.config({
-    path: "./.env"
-});
+// Load environment variables
+dotenv.config({ path: "./.env" });
 
-// Create HTTP server and integrate it with socket.io
+// Environment Variables
+const SERIAL_PORT = process.env.SERIAL_PORT || "COM9";
+const PORT = process.env.PORT || 4000;
+
+// WebSocket Message Types
+const MESSAGE_TYPES = {
+  CLASSIFY: "classify",
+  ARDUINO_DATA: "arduino-data",
+  ERROR: "error",
+  ACKNOWLEDGE: "acknowledge",
+};
+
+// Create HTTP server
 const server = createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*", // Replace with your frontend's URL for security
-        methods: ["GET", "POST"]
+
+// Set up WebSocket server
+const wss = new WebSocketServer({ server });
+
+// Initialize SerialPort and parser for Arduino communication
+let sPort;
+try {
+  if (!SERIAL_PORT) {
+    throw new Error("Serial port not configured. Set the SERIAL_PORT environment variable.");
+  }
+
+  sPort = new SerialPort({
+    path: SERIAL_PORT,
+    baudRate: 9600,
+  });
+
+  const parser = sPort.pipe(new ReadlineParser({ delimiter: "\n" }));
+  const broadcastMessage = (message) => {
+    wss.clients.forEach((client) => {
+        client.send(JSON.stringify(message));
+      
+    });
+  };
+  // Listen for data from Arduino
+  parser.on("data", (data) => {
+    const trimmedData = data.trim();
+    console.log(`Arduino: ${trimmedData}`);
+
+
+    // Broadcast data to all connected WebSocket clients
+    wss.clients.forEach((client) => {
+      if (client.readyState === client.OPEN) {
+        client.send(JSON.stringify({ type: MESSAGE_TYPES.ARDUINO_DATA, data: trimmedData }));
+      }
+    });
+
+    if (trimmedData === "FULL") {
+      console.log("Trash is full! Notifying clients...");
+      broadcastMessage({
+        type: "trash_status",
+        status: "full",
+        message: "The trash bin is full! Please empty it.",
+      });
+    } else if (trimmedData === "OK") {
+      console.log("Trash is not full.");
+      broadcastMessage({
+        type: "trash_status",
+        status: "ok",
+        message: "The trash bin has space.",
+      });
     }
+  });
+
+  sPort.on("open", () => {
+    console.log(`Serial port (${SERIAL_PORT}) opened successfully.`);
+  });
+
+  sPort.on("error", (err) => {
+    console.error(`Serial port error: ${err.message}`);
+  });
+} catch (error) {
+  console.error(`Error setting up serial port: ${error.message}`);
+}
+
+// WebSocket server connection handling
+wss.on("connection", (ws) => {
+  console.log("Frontend connected via WebSocket");
+
+  ws.on("message", (message) => {
+    try {
+      const parsedMessage = JSON.parse(message);
+      const { type, modelClass, detectClass } = parsedMessage;
+  
+      // Ensure the message type is correct
+      if (type === MESSAGE_TYPES.CLASSIFY) {
+        const validClassifications = ["biodegradable", "non_biodegradable"];
+        if (!validClassifications.includes(modelClass)) {
+          ws.send(
+            JSON.stringify({ type: MESSAGE_TYPES.ERROR, message: "Invalid model class type" })
+          );
+          console.error("Invalid model class type received:", modelClass);
+          return;
+        }
+  
+        // Log the detectClass for later tracking or processing
+        if (!detectClass) {
+          ws.send(
+            JSON.stringify({ type: MESSAGE_TYPES.ERROR, message: "Missing detect class in message" })
+          );
+          console.error("Missing detect class in message");
+          return;
+        }
+        console.log(`Received detect class: ${detectClass}`);
+  
+        if (!sPort || !sPort.isOpen) {
+          ws.send(
+            JSON.stringify({
+              type: MESSAGE_TYPES.ERROR,
+              message: "Serial port is not open or available",
+            })
+          );
+          console.error("Serial port is not open or available");
+          return;
+        }
+  
+        const command = modelClass === "biodegradable" ? "D\n" : "N\n";
+        sPort.write(command, (err) => {
+          if (err) {
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPES.ERROR,
+                message: "Failed to write to serial port",
+              })
+            );
+            console.error("Error writing to serial port:", err.message);
+            return;
+          }
+          console.log(`Sent '${command.trim()}' to Arduino`);
+          ws.send(
+            JSON.stringify({
+              type: MESSAGE_TYPES.ACKNOWLEDGE,
+              message: `Command '${command.trim()}' sent to Arduino`,
+            })
+          );
+  
+          // Optionally store detectClass for future use
+          // Example: Log or process detectClass here
+        });
+      } else {
+        ws.send(
+          JSON.stringify({ type: MESSAGE_TYPES.ERROR, message: "Unknown message type" })
+        );
+        console.error("Unknown message type received:", type);
+      }
+    } catch (err) {
+      ws.send(
+        JSON.stringify({ type: MESSAGE_TYPES.ERROR, message: "Failed to process message" })
+      );
+      console.error("Error processing message:", err.message);
+    }
+  });
+  
+
+  ws.on("close", () => {
+    console.log("Frontend disconnected");
+  });
 });
 
-// WebSocket integration
-io.on("connection", (socket) => {
-    console.log("Client connected:", socket.id);
-
-    // Handle start-camera event from the frontend
-    socket.on("start-camera", () => {
-        console.log("Start-camera event received from client");
-
-        let options = {
-            mode: "text",
-            pythonOptions: ["-u"], // Get output in real-time
-            scriptPath: "ecoSort-ai",
-            args: []
-        };
-
-        const pyshell = new PythonShell("wasteManagement.py", options);
-
-        // Send real-time output from Python to the client
-        pyshell.on("message", (message) => {
-            console.log("Real-time message from Python:", message);
-            socket.emit("camera-data", message); // Real-time data
-        });
-
-        // Handle Python script completion
-        pyshell.end((err, code, signal) => {
-            if (err) {
-                console.error("Error executing Python script:", err);
-                socket.emit("camera-error", "Error executing script");
-                return;
-            }
-            console.log("Python script finished.");
-            socket.emit("camera-complete", "Script execution completed");
-        });
-    });
-
-    // Handle disconnection
-    socket.on("disconnect", () => {
-        console.log("Client disconnected:", socket.id);
-    });
-});
-
-// Start the server and connect to the database
-const port = process.env.port || 4000;
+// Start the server
 connectDb()
-    .then(() => {
-        server.listen(port, () => {
-            console.log("Server is running on port", port);
-        });
-    })
-    .catch((error) => {
-        console.log("Error connecting to the database:", error);
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Server is running on http://localhost:${PORT}`);
     });
+  })
+  .catch((error) => {
+    console.error("Error connecting to the database:", error);
+  });
