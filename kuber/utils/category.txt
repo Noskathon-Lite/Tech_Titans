@@ -1,0 +1,5 @@
+base
+bottle
+cardboard
+paper
+plastic
