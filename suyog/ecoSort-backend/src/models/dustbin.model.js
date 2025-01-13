@@ -5,30 +5,29 @@ import { Schema, model } from "mongoose";
 // } from "../services/token.service.js";
 // import bcrypt from "bcrypt";
 
-const wasteSchema = new Schema(
+const dustbinSchema = new Schema(
   {
-    dustbinId: {
+    userID: {
       type: Schema.Types.ObjectId,
-      ref: "Dustbin", // Reference to the User model
+      ref: "User",
       required: true,
     },
-    category: {
-      type: String,
+    wasteID: {
+      type: Schema.Types.ObjectId,
+      ref: "Waste", // Reference to the User model
       required: true,
-      enum: ["plastic", "paper", "bottle", "cardboard", "other"],
+    },
+    dustbinId: {
+      type: Number,
+      required: true,
       trim: true,
       maxLength: 30,
     },
-    type: {
+    items: {
       type: String,
       required: true,
       trim: true,
-      enum: ["biodegradable", "non-biodegradable"],
       maxLength: 30,
-    },
-    image: {
-      type: String,
-      required: true,
     },
   },
   {
@@ -37,6 +36,6 @@ const wasteSchema = new Schema(
 );
 
 //create a table
-const Waste = model("Dustbin", wasteSchema);
+const Dustbin = model("Dustbin", dustbinSchema);
 
-export default Waste;
+export default Dustbin;

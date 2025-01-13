@@ -88,10 +88,10 @@ try {
 }
 
 // WebSocket server connection handling
-wss.on("connection", (ws) => {
+wss.on("connection",  (ws) => {
   console.log("Frontend connected via WebSocket");
 
-  ws.on("message", (message) => {
+  ws.on("message",  (message) => {
     try {
       const parsedMessage = JSON.parse(message);
       const { type, modelClass, detectClass } = parsedMessage;
@@ -147,7 +147,20 @@ wss.on("connection", (ws) => {
               message: `Command '${command.trim()}' sent to Arduino`,
             })
           );
-  
+          // const userID = req?.user._id;
+          // const user = await User.findById(userID);
+          // const dustbinId = req.params.id;
+
+          // if (!user) {
+          //   throw new ApiError(404, "User not found");
+          // }const waste = await Waste.create({
+          //   category,
+          //   type,
+          //   dustbinId: dustbinId,
+          // });
+          // if(!waste){
+          //   throw new ApiError(400, "Waste not added");
+          //  }
           // Optionally store detectClass for future use
           // Example: Log or process detectClass here
         });
